@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, Navigate } from 'react-router'
+import { Navigate } from 'react-router'
 import { useFarmAccess, type FarmAccessContextValue } from './auth/FarmAccessContext'
 
 export function isGradeRxPilot(access: FarmAccessContextValue | null): boolean {
@@ -38,7 +38,6 @@ export function GradeRxPage() {
         <h1 id="grade-rx-title">Grade Rx</h1>
         <p>Plans for {access.activeFarm.name} stay in this browser. Save a copy to keep a backup.</p>
       </div>
-      <Link className="secondary-action" to="/fields">Back to Fields</Link>
     </div>
     {access.source === 'live' ? <GradeRxWorkspace key={scope} scope={scope} /> : <p role="status">Connect to the internet and check your farm access to open Grade Rx.</p>}
   </section>

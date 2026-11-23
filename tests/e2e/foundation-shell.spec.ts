@@ -953,37 +953,38 @@ test('multi-farm access requires an explicit choice and keeps both farms usable'
   expect(unexpected).toEqual([])
 })
 
-test('Fields opens the protected Grade Rx preview in a separate tab', async ({ page, context }) => {
+test('Grade Rx stays out of navigation and Fields outside the pilot', async ({ page, context }, testInfo) => {
   test.skip(process.env.VITE_GRADE_RX_PILOT_USER_ID === userId, 'The pilot uses the in-app workspace.')
-  const previewUrl = 'https://grade-mjoy2bg5d-mason-wells-projects.vercel.app/'
-  const launchLink = page.getByRole('link', { name: 'Open Grade Rx (new tab)' })
-  await page.goto('/fields')
-  await expect(page).toHaveURL(/\/login/)
-  await expect(launchLink).toHaveCount(0)
-
   await seedSession(context)
   const unexpected = await mockSupabase(page, [farms[0]])
   await page.goto('/fields')
-  await expect(launchLink).toBeVisible()
-  await expect(launchLink).toHaveAttribute('href', previewUrl)
-  expect((await launchLink.boundingBox())?.height).toBeGreaterThanOrEqual(48)
-  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
-
-  await context.route(previewUrl, (route) => route.fulfill({ contentType: 'text/html', body: '<title>Grade Rx test destination</title>' }))
-  const [preview] = await Promise.all([context.waitForEvent('page'), launchLink.click()])
-  await expect(preview).toHaveURL(previewUrl)
-  expect(await preview.evaluate(() => ({ opener: window.opener, referrer: document.referrer }))).toEqual({ opener: null, referrer: '' })
-  await expect(page).toHaveURL(/\/fields$/)
+  await expect(page.getByText('North Forty')).toBeVisible()
+  await expect(page.getByText(/Grade Rx/)).toHaveCount(0)
+  if (testInfo.project.name === 'chromium-phone') {
+    await page.getByRole('navigation', { name: 'Farm Rx navigation' }).getByRole('button', { name: 'More' }).click()
+    await expect(page.getByRole('region', { name: 'More Farm Rx destinations' }).getByRole('link', { name: 'Alerts' })).toBeVisible()
+  }
+  await expect(page.getByRole('link', { name: 'Grade Rx' })).toHaveCount(0)
   await page.goto('/fields/grade-rx')
   await expect(page).toHaveURL(/\/fields$/)
   await expect(page.getByTitle('Grade Rx drainage workspace')).toHaveCount(0)
   expect(unexpected).toEqual([])
 })
 
-test('Fields opens Grade Rx with the configured Farm Rx account', async ({ page, context }, testInfo) => {
+test('the sidebar opens Grade Rx with the configured Farm Rx account', async ({ page, context }, testInfo) => {
   test.skip(process.env.VITE_GRADE_RX_PILOT_USER_ID !== userId, 'Enable the Grade Rx build with the synthetic pilot user.')
+  const phone = testInfo.project.name === 'chromium-phone'
   const path = '/fields/grade-rx'
   const workspace = page.getByTitle('Grade Rx drainage workspace')
+  const fieldsLink = page.getByRole('link', { name: 'Fields', exact: true })
+  // Grade Rx sits near the bottom of the desktop sidebar and under More on a phone.
+  const launch = async () => {
+    if (phone) await page.getByRole('navigation', { name: 'Farm Rx navigation' }).getByRole('button', { name: 'More' }).click()
+    const link = (phone ? page.getByRole('region', { name: 'More Farm Rx destinations' }) : page.locator('.sidebar')).getByRole('link', { name: 'Grade Rx' })
+    await expect(link).toHaveAttribute('href', path)
+    expect((await link.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+    await link.click()
+  }
   await page.goto(path)
   await expect(page).toHaveURL(/\/login/)
   await expect(workspace).toHaveCount(0)
@@ -994,31 +995,32 @@ test('Fields opens Grade Rx with the configured Farm Rx account', async ({ page,
   await page.getByRole('button', { name: 'Prairie View' }).click()
   await expect(page).toHaveURL(/\/today$/)
   await page.goto('/fields')
+  await expect(page.getByText('North Forty')).toBeVisible()
+  await expect(page.locator('main').getByText(/Grade Rx/)).toHaveCount(0)
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready
     if (!navigator.serviceWorker.controller) await new Promise<void>((resolve) => navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), { once: true }))
   })
-  const launch = page.getByRole('link', { name: 'Open Grade Rx', exact: true })
-  await expect(launch).toBeVisible()
-  await expect(launch).toHaveAttribute('href', path)
-  expect((await launch.boundingBox())?.height).toBeGreaterThanOrEqual(48)
-  await launch.click()
+  await launch()
   await expect(page).toHaveURL(/\/fields\/grade-rx$/)
   await expect(workspace).toHaveAttribute('data-grade-scope', `${userId}:${farmA}`)
   await expect(workspace.contentFrame().getByRole('heading', { name: 'Your fields' })).toBeVisible()
+  await expect(fieldsLink).not.toHaveAttribute('aria-current', 'page')
+  if (phone) await expect(page.getByRole('navigation', { name: 'Farm Rx navigation' }).getByRole('button', { name: 'More' })).toHaveClass(/active/)
+  else await expect(page.locator('.sidebar').getByRole('link', { name: 'Grade Rx' })).toHaveAttribute('aria-current', 'page')
   expect(context.pages()).toHaveLength(1)
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1)
-  await page.screenshot({ path: testInfo.outputPath('grade-rx-fields.png') })
+  await page.screenshot({ path: testInfo.outputPath('grade-rx-page.png') })
 
-  await page.getByRole('link', { name: 'Back to Fields' }).click()
+  await fieldsLink.click()
+  await expect(page).toHaveURL(/\/fields$/)
   await expect(workspace).toHaveCount(0)
-  await launch.click()
+  await launch()
   await expect(workspace.contentFrame().getByRole('heading', { name: 'Your fields' })).toBeVisible()
   await page.getByLabel('Active farm').selectOption(farmB)
   await expect(page).toHaveURL(/\/today$/)
   await expect(workspace).toHaveCount(0)
-  await page.goto('/fields')
-  await launch.click()
+  await launch()
   await expect(workspace).toHaveAttribute('data-grade-scope', `${userId}:${farmB}`)
   await expect(workspace.contentFrame().getByRole('heading', { name: 'Your fields' })).toBeVisible()
   await page.getByRole('button', { name: 'Sign out' }).click()
