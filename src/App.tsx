@@ -1,7 +1,7 @@
 import { type FormEvent, type ReactNode, Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   Navigate,
-  NavLink,
+  Link,
   Route,
   Routes,
   useLocation,
@@ -14,12 +14,12 @@ import { isPasswordRecoveryStorageError, minimumPasswordLength, passwordEmailDel
 import {
   bootstrapInitialOwnerFarm,
 } from "./auth/bootstrapFarm";
-import { FarmAccessProvider, useFarmAccess } from "./auth/FarmAccessContext";
+import { FarmAccessProvider, useFarmAccess, type FarmAccessContextValue } from "./auth/FarmAccessContext";
 import { settlePendingSettingsWork } from "./data/pendingSettingsWork";
 import { beginFarmReplayAuthorization, canAccessFarmModule, canEditFarmModule, canReplayFarmModule, createFarmAccessValidationGate, FarmAccessStorageUnsafeError, hasPendingFarmWork, loadFarmAccess, loadFarmAccessProfile, publishFarmReadyAuthorization, selectFarm, type FarmAccess, type FarmAppModule, type LoadedFarmAccessProfile } from "./auth/farmContext";
 import { RevokedFarmRecovery } from './components/RevokedFarmRecovery';
 import { LazyRouteErrorBoundary } from "./components/LazyRouteErrorBoundary";
-import { GradeRxPage } from "./GradeRxPage";
+import { GradeRxPage, isGradeRxPilot } from "./GradeRxPage";
 import { createSubmitLock } from "./lib/submitLock";
 import { RequireSession } from "./auth/RequireSession";
 import { NotificationsPage, NotificationBell } from "./NotificationsModule";
@@ -100,6 +100,8 @@ function NavGlyph({ d }: { d: string }) {
 }
 
 type NavigationItem = { label: string; path: string; icon: ReactNode; module: FarmAppModule };
+// The pinned Grade Rx frame only opens under this exact parent path, so the page keeps its Fields address.
+const gradeRxPath = "/fields/grade-rx";
 const navigation: NavigationItem[] = [
   {
     label: "Today",
@@ -200,6 +202,12 @@ const navigation: NavigationItem[] = [
     ),
   },
   {
+    label: "Grade Rx",
+    path: gradeRxPath,
+    module: "fields",
+    icon: <NavGlyph d="M12 3c-4 5-6 8-6 11a6 6 0 0 0 12 0c0-3-2-6-6-11zM9 15a3 3 0 0 0 3 3" />,
+  },
+  {
     label: "Farm settings",
     path: "/privacy",
     module: "fields",
@@ -212,6 +220,17 @@ const navigation: NavigationItem[] = [
 // member with nothing to record (read-only) has no Record button. Every other allowed destination stays reachable from More.
 const mobilePrimaryOrder = ["/today", "/grain", "/fields"];
 const mobilePrimaryCount = 3;
+
+function allowedNavigation(access: FarmAccessContextValue): NavigationItem[] {
+  return navigation.filter((item) => canAccessFarmModule(access.profile, item.module) && (item.path !== gradeRxPath || isGradeRxPilot(access)));
+}
+
+// Grade Rx sits under /fields but has its own nav item, so Fields is not also marked current there.
+// Matches NavLink: case-insensitive, trailing slash ignored.
+function isNavActive(path: string, pathname: string): boolean {
+  const current = pathname.toLowerCase().replace(/\/+$/, "");
+  return current === path || (current.startsWith(`${path}/`) && current !== gradeRxPath);
+}
 
 function CapabilityRoute({ module, editOnly = false, lockWrites = false, children }: { module: FarmAppModule; editOnly?: boolean; lockWrites?: boolean; children: ReactNode }) {
   const { profile } = useFarmAccess();
@@ -251,7 +270,8 @@ export function FarmSwitcher({ farms, activeFarm, chooseFarm }: { farms: FarmAcc
 
 function AppLayout() {
   const { signOut, user } = useAuth();
-  const { farms, activeFarm, profile, source, chooseFarm } = useFarmAccess();
+  const farmAccess = useFarmAccess();
+  const { farms, activeFarm, profile, source, chooseFarm } = farmAccess;
   const navigate = useNavigate();
   const location = useLocation();
   // LD-2: Harvest and Fields show a "from loads" figure derived from scale tickets, which are
@@ -289,7 +309,7 @@ function AppLayout() {
         <div className="farm-lockup">
           <div className="farm-name">{farmName}</div>
         </div>
-        <Navigation className="sidebar-nav" items={navigation.filter((item) => canAccessFarmModule(profile, item.module))} />
+        <Navigation className="sidebar-nav" items={allowedNavigation(farmAccess)} />
         <div className="powered-by">
           <div className="powered-mark">
             Crop <span>RX</span>
@@ -928,32 +948,38 @@ function InitialFarmSetup({ onComplete }: { onComplete: () => Promise<void> }) {
   );
 }
 
+function NavItemLink({ item, onNavigate }: { item: NavigationItem; onNavigate?: () => void }) {
+  const active = isNavActive(item.path, useLocation().pathname);
+  return (
+    <Link className={`nav-link${active ? " active" : ""}`} aria-current={active ? "page" : undefined} to={item.path} onClick={onNavigate}>
+      <span className="nav-icon" aria-hidden="true">
+        {item.icon}
+      </span>
+      <span>{item.label}</span>
+    </Link>
+  );
+}
+
 function Navigation({ className, items, onNavigate }: { className: string; items: NavigationItem[]; onNavigate?: () => void }) {
   return (
     <div className={className}>
-      {items.map((item) => (
-        <NavLink key={item.path} className="nav-link" to={item.path} onClick={onNavigate}>
-          <span className="nav-icon" aria-hidden="true">
-            {item.icon}
-          </span>
-          <span>{item.label}</span>
-        </NavLink>
-      ))}
+      {items.map((item) => <NavItemLink key={item.path} item={item} onNavigate={onNavigate} />)}
     </div>
   );
 }
 
 function MobileNavigation() {
-  const { profile } = useFarmAccess();
+  const farmAccess = useFarmAccess();
+  const { profile } = farmAccess;
   const location = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
   const [recordOpen, setRecordOpen] = useState(false);
   // Record opens the same tiles Today shows, loaded through the same pure reads; a member with no tiles has no button.
   const canRecord = todayRecordTiles(profile).length > 0;
-  const allowed = navigation.filter((item) => canAccessFarmModule(profile, item.module));
+  const allowed = allowedNavigation(farmAccess);
   const mobilePrimaryNavigation = mobilePrimaryOrder.flatMap((path) => allowed.filter((item) => item.path === path)).slice(0, mobilePrimaryCount);
   const mobileMoreNavigation = allowed.filter((item) => !mobilePrimaryNavigation.includes(item));
-  const moreActive = mobileMoreNavigation.some((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`));
+  const moreActive = mobileMoreNavigation.some((item) => isNavActive(item.path, location.pathname));
   // A route change means the view that asked a question is gone; drop the question with it.
   useEffect(() => { setMoreOpen(false); setRecordOpen(false); cancelPendingDialogs(); }, [location.pathname]);
   useEffect(() => () => cancelPendingDialogs(), []);
@@ -976,12 +1002,7 @@ function MobileNavigation() {
       )}
       <nav className="mobile-nav" aria-label="Farm Rx navigation">
         <div className="mobile-nav-list">
-          {mobilePrimaryNavigation.map((item) => (
-            <NavLink key={item.path} className="nav-link" to={item.path}>
-              <span className="nav-icon" aria-hidden="true">{item.icon}</span>
-              <span>{item.label}</span>
-            </NavLink>
-          ))}
+          {mobilePrimaryNavigation.map((item) => <NavItemLink key={item.path} item={item} />)}
           {canRecord && (
             <button className={`nav-link mobile-record-toggle${recordOpen ? " active" : ""}`} type="button" aria-expanded={recordOpen} aria-controls="mobile-record-menu" onClick={() => { setMoreOpen(false); setRecordOpen((open) => !open); }}>
               <span className="nav-icon" aria-hidden="true"><NavGlyph d="M12 5v14M5 12h14" /></span>

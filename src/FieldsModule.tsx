@@ -8,8 +8,6 @@ import {
   type ReactNode,
 } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
-import { useOptionalFarmAccess } from "./auth/FarmAccessContext";
-import { isGradeRxPilot } from "./GradeRxPage";
 import { fieldsRepository, moduleYear } from "./data";
 import { loadHarvestComparison, type GrainLoad } from "./data/grain";
 import type {
@@ -493,7 +491,6 @@ function toDraft(
 }
 
 export function FieldsPage() {
-  const gradeRxPilot = isGradeRxPilot(useOptionalFarmAccess());
   const { data, error, refresh } = useFieldsData();
   const navigate = useNavigate();
   const [cropFilter, setCropFilter] = useState("all");
@@ -601,20 +598,6 @@ export function FieldsPage() {
           Add field
         </Link>
       </div>
-      <section className="page-heading" aria-labelledby="grade-rx-heading">
-        <div>
-          <h2 id="grade-rx-heading">{gradeRxPilot ? "Grade Rx" : "Grade Rx preview"}</h2>
-          <p>Map drainage and compare dry dams and diversions. {gradeRxPilot ? "Plans are saved in this browser for your account and farm." : "Plans are saved in the browser you use for Grade Rx. Sign in to Vercel to open the preview."}</p>
-        </div>
-        {gradeRxPilot ? <Link className="secondary-action" to="/fields/grade-rx">Open Grade Rx</Link> : <a
-          className="secondary-action"
-          href="https://grade-mjoy2bg5d-mason-wells-projects.vercel.app/"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Open Grade Rx (new tab)
-        </a>}
-      </section>
       <div className="stats-grid" aria-label="Farm totals">
         <StatCard
           label="Fields"
